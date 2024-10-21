@@ -2,37 +2,47 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+)
+
+type PortType int
+
+const (
+	IN PortType = iota
+	OUT
 )
 
 type Port struct {
-	Type  string
-	Value int
+	Type        PortType
+	Number      int
+	Value       int
+	Transaction chan int
 }
 
-func Read(ports []Port, pos int) (int, error) {
-	if pos >= len(ports) {
-		return -1, errors.New("no such port")
+func (p *Port) Read(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-p.Transaction:
+			fmt.Printf("Reading from IN port number %d value %d\n", p.Number, rand.Intn(2))
+		}
 	}
-	if ports[pos].Type != "IN" {
-		return -1, errors.New("port must be IN")
-	}
-	return ports[pos].Value, nil
 }
 
-func Write(ports []Port, pos int, value int) error {
-	if pos >= len(ports) {
-		return errors.New("no such port")
+func (p *Port) Write(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case tr := <-p.Transaction:
+			p.Value = 42
+			fmt.Printf("Writing to OUT port number %d value %d. Transaction %d\n", p.Number, p.Value, tr)
+		}
 	}
-	if ports[pos].Type != "OUT" {
-		return errors.New("port must be OUT")
-	}
-	ports[pos].Value = value
-	return nil
 }
 
 func main() {
@@ -40,31 +50,40 @@ func main() {
 
 	fmt.Println("Enter number of IN ports")
 	scanner.Scan()
-	inNumber, err := strconv.Atoi(scanner.Text())
+	inPortsNum, err := strconv.Atoi(scanner.Text())
 	if err != nil {
-		panic("Only integers are accepted")
+		panic("Unable to parse a number of IN ports")
 	}
 
 	fmt.Println("Enter number of OUT ports")
 	scanner.Scan()
-	outNumber, err := strconv.Atoi(scanner.Text())
+	outPortsNum, err := strconv.Atoi(scanner.Text())
 	if err != nil {
-		panic("Only integers are accepted")
+		panic("Unable to parse a number of OUT ports")
 	}
 
-	inPorts := make([]Port, inNumber)
-	for i := 0; i < inNumber; i++ {
-		inPorts[i] = Port{Type: "IN", Value: -1}
+	var wg sync.WaitGroup
+	wg.Add(inPortsNum + outPortsNum)
+
+	inPorts := make([]Port, 0, inPortsNum)
+	outPorts := make([]Port, 0, outPortsNum)
+
+	for i := 0; i < inPortsNum; i++ {
+		port := Port{Type: IN, Number: i, Value: 0, Transaction: make(chan int)}
+		inPorts = append(inPorts, port)
+		go port.Read(&wg)
 	}
 
-	outPorts := make([]Port, outNumber)
-	for i := 0; i < outNumber; i++ {
-		outPorts[i] = Port{Type: "OUT", Value: -1}
+	for i := 0; i < outPortsNum; i++ {
+		port := Port{Type: OUT, Number: i, Value: 0, Transaction: make(chan int)}
+		outPorts = append(outPorts, port)
+		go port.Write(&wg)
 	}
 
 	for scanner.Scan() {
 		s := scanner.Text()
 		args := strings.Split(s, " ")
+
 		if args[0] == "READ" {
 			if len(args) != 2 {
 				fmt.Println("Usage: READ <n>")
@@ -77,13 +96,7 @@ func main() {
 				continue
 			}
 
-			val, err := Read(inPorts, portNumber)
-			if err != nil {
-				fmt.Println(err.Error())
-				continue
-			}
-
-			fmt.Printf("Value of port %d = %d\n", portNumber, val)
+			inPorts[portNumber].Transaction <- 0
 		} else if args[0] == "WRITE" {
 			if len(args) != 3 {
 				fmt.Println("Usage: WRITE <n> <n>")
@@ -96,19 +109,15 @@ func main() {
 				continue
 			}
 
-			valToWrite, err := strconv.Atoi(args[2])
+			tr, err := strconv.Atoi(args[2])
 			if err != nil {
 				fmt.Println("wrong number parameter")
 				continue
 			}
 
-			err = Write(outPorts, portNumber, valToWrite)
-			if err != nil {
-				fmt.Println(err.Error())
-				continue
-			}
-
-			fmt.Printf("Wrote value %d to port %d\n", valToWrite, portNumber)
+			outPorts[portNumber].Transaction <- tr
 		}
 	}
+
+	wg.Wait()
 }
